@@ -7,14 +7,15 @@ name: Build & Release All-in-One
 #     （eBPF 透明代理需要 Linux 6.6+ 且内核带 with_ebpf），保留只会误导用户下载装不上的包。
 #     需要 24.10 的用户请升级到 25.12 再安装。
 #   - core job（matrix）：clone reF1nd/sing-box @ v1.14.4-reF1nd，打本项目补丁
-#     （仅 003 store_selected；002 clash proxy-providers 已由 reF1nd 1.14.4 官方自带，
-#     不再单独打），Go 交叉编译多架构静态内核（amd64 / arm64；amd64v3 为 amd64 副本）。
-#     0.4.0 起编入 with_ebpf（支持 Linux 内核 eBPF；reF1nd 源码存在 include/ebpf.go
-#     即自动启用，与官方流水线一致）。armv7 / mipsle 不再构建。
-#   - package job：只发一个 Release，tag 即输入版本号（如 0.4.0），包含：
-#       · 每架构一个一体化 zip（luci 包 + 内核 + install.sh + README）
+#     （003 store_selected；002 providers 已由 reF1nd 1.14.4 自带），交叉编译：
+#       amd64 / arm64：with_gvisor + with_ebpf；mipsle：GOARCH=mipsle + GOMIPS=softfloat，
+#       不编 with_gvisor / with_ebpf（gVisor 仅支持 amd64/arm64，32 位 eBPF 库不受支持）。
+#     MIPSLE 保留 QUIC、WireGuard、uTLS、Clash API、Tailscale 等常用功能。
+#     amd64v3 仍为 amd64 二进制副本。armv7 / 大端 mips 暂不构建。
+#   - package job：只发一个 Release，tag 即输入版本号，包含：
+#       · amd64 / arm64 / mipsle 各自的一体化 zip（luci 包 + 内核 + install.sh + README）
 #       · 独立 luci-app-homeproxy_<ver>-all.apk
-#       · sing-box-1.14.4-reF1nd-refind_<版本>-linux-{amd64,amd64v3,arm64}-musl.tar.gz
+#       · sing-box-1.14.4-reF1nd_<版本>-linux-{amd64,amd64v3,arm64,mipsle}-musl.tar.gz
 #     构建时会把 update_core.sh 的 REFIND_TAG 改写为该 Release 标签，
 #     使「更新内核」按钮从同一个 Release 自动下载打补丁内核。
 #     内核二进制报告的版本为 1.14.4-reF1nd_<发布版本>（如 1.14.4-reF1nd_0.4.0），
@@ -125,8 +126,10 @@ jobs:
           # 单一 Release 方案：把运行时内核下载标签改写为本次发布标签（tag 原样保留），
           # 使「更新内核」从同一个 Release 拉取打补丁内核。
           sed -i "s|^REFIND_TAG=.*|REFIND_TAG=\"$tag\"|" "$pkg_dir/root/etc/homeproxy/scripts/update_core.sh"
+          # 运行时自动更新必须从当前 fork 的 Release 下载，不能仍指向上游仓库。
+          sed -i "s|^REFIND_REPO=.*|REFIND_REPO=\"${GITHUB_REPOSITORY}\"|" "$pkg_dir/root/etc/homeproxy/scripts/update_core.sh"
           grep -E '^PKG_(VERSION|RELEASE):=' "$pkg_dir/Makefile"
-          grep -E '^REFIND_TAG=' "$pkg_dir/root/etc/homeproxy/scripts/update_core.sh"
+          grep -E '^REFIND_(REPO|TAG)=' "$pkg_dir/root/etc/homeproxy/scripts/update_core.sh"
           echo "version=$version" >>"$GITHUB_OUTPUT"
 
       - name: Download core checksums
@@ -144,7 +147,7 @@ jobs:
           pkg_dir="${{ steps.pkgdir.outputs.dir }}"
           script="$pkg_dir/root/etc/homeproxy/scripts/update_core.sh"
           [ -f "$script" ] || { echo "::error::update_core.sh not found: $script"; exit 1; }
-          for arch in amd64 arm64; do
+          for arch in amd64 arm64 mipsle; do
             f="sha256-${arch}.txt"
             [ -f "$f" ] || { echo "::error::missing checksum artifact for ${arch} (${f})"; exit 1; }
             digest="$(awk '{print $1}' "$f")"
@@ -239,10 +242,18 @@ jobs:
             goarch: amd64
             goarm: ""
             gomips: ""
+            build_tags: with_gvisor,with_quic,with_dhcp,with_wireguard,with_utls,with_acme,with_clash_api,with_tailscale,with_ccm,with_ocm,with_cloudflared,with_usbip,with_openvpn,with_openconnect,with_musl,with_ebpf
           - arch: arm64
             goarch: arm64
             goarm: ""
             gomips: ""
+            build_tags: with_gvisor,with_quic,with_dhcp,with_wireguard,with_utls,with_acme,with_clash_api,with_tailscale,with_ccm,with_ocm,with_cloudflared,with_usbip,with_openvpn,with_openconnect,with_musl,with_ebpf
+          - arch: mipsle
+            goarch: mipsle
+            goarm: ""
+            gomips: softfloat
+            # MIPSLE 是 32 位目标：省略仅支持 amd64/arm64 的 gVisor 和不支持 32 位架构的 eBPF。
+            build_tags: with_quic,with_dhcp,with_wireguard,with_utls,with_acme,with_clash_api,with_tailscale,with_ccm,with_ocm,with_cloudflared,with_usbip,with_openvpn,with_openconnect,with_musl
     env:
       # 国内可达的 Go 模块代理（goproxy.cn 优先），并关闭 HTTP/2 客户端，
       # 规避 proxy.golang.org 并发下载大模块时偶发的
@@ -309,7 +320,7 @@ jobs:
           [ -n "$ver" ] || ver="dev"
           echo "core version string: 1.14.4-reF1nd_${ver}"
           go build -trimpath -o "../sing-box-${{ matrix.arch }}" \
-            -tags "with_gvisor,with_quic,with_dhcp,with_wireguard,with_utls,with_acme,with_clash_api,with_tailscale,with_ccm,with_ocm,with_cloudflared,with_usbip,with_openvpn,with_openconnect,with_musl,with_ebpf" \
+            -tags "${{ matrix.build_tags }}" \
             -ldflags "-X 'github.com/sagernet/sing-box/constant.Version=1.14.4-reF1nd_${ver}' -X runtime.godebugDefault=multipathtcp=0,tlssha1=1 -s -w -buildid=" \
             ./cmd/sing-box
 
@@ -318,7 +329,23 @@ jobs:
           set -e
           f="sing-box-${{ matrix.arch }}"
           file "$f"
-          ./$f version | head -n1
+          readelf -h "$f" | grep -E 'Class:|Data:|Machine:'
+          case "${{ matrix.arch }}" in
+            mipsle)
+              readelf -h "$f" | grep -q 'Class:.*ELF32'
+              readelf -h "$f" | grep -q '2.s complement, little endian'
+              readelf -h "$f" | grep -q 'Machine:.*MIPS'
+              ;;
+            amd64)
+              readelf -h "$f" | grep -q 'Machine:.*X86-64'
+              ;;
+            arm64)
+              readelf -h "$f" | grep -q 'Machine:.*AArch64'
+              ;;
+          esac
+          ver="${{ inputs.tag }}"
+          ver="${ver#v}"; ver="${ver#V}"
+          strings "$f" | grep -Fq "1.14.4-reF1nd_${ver}"
 
       # 内核压缩包只在这里打一次包：tar/gzip 不是可复现的（含 mtime），
       # 若在不同 job 各打一次，两次的 sha256 会不一致，内置校验值就对不上。
@@ -387,7 +414,7 @@ jobs:
           tag="${{ inputs.tag }}"
           version="${tag#v}"; version="${version#V}"
           echo "version=$version"
-          for arch in amd64 arm64; do
+          for arch in amd64 arm64 mipsle; do
             # 命名与 luci 包（luci-app-homeproxy_<ver>-all.apk）一致：版本号在前、
             # 架构在后，用下划线分隔 —— README 与 deploy/README.md 都按这个名字
             # 写命令，用连字符会让用户照文档下载 404。
@@ -399,7 +426,8 @@ jobs:
             cp -f deploy/install.sh                                "$d/"
             cp -f deploy/README.md                                 "$d/"
             chmod 0755 "$d/install.sh" "$d/sing-box"
-            ( cd "$d" && zip -r "../$d.zip" . )
+            # ZIP 根目录直接存放 sing-box/APK/install.sh，便于路由器 unzip -p 流式取出核心。
+            ( cd "$d" && zip "../$d.zip" * )
             ls -la "$d.zip"
           done
 
@@ -411,7 +439,7 @@ jobs:
           VER="1.14.4-reF1nd"
           tag="${{ inputs.tag }}"
           version="${tag#v}"; version="${version#V}"
-          for arch in amd64 arm64; do
+          for arch in amd64 arm64 mipsle; do
             src="artifacts/core-tar-${arch}/sing-box-${VER}_${version}-linux-${arch}-musl.tar.gz"
             [ -f "$src" ] || { echo "::error::missing core tarball: $src"; exit 1; }
             cp -f "$src" "./sing-box-${VER}_${version}-linux-${arch}-musl.tar.gz"
@@ -420,7 +448,7 @@ jobs:
           cp -f "sing-box-${VER}_${version}-linux-amd64-musl.tar.gz" "sing-box-${VER}_${version}-linux-amd64v3-musl.tar.gz"
           # 顺手把校验值汇总成一个文件随 Release 发布，便于手工核对
           : > "sha256sums-${version}.txt"
-          for arch in amd64 arm64; do
+          for arch in amd64 arm64 mipsle; do
             printf '%s  sing-box-%s_%s-linux-%s-musl.tar.gz\n' \
               "$(awk '{print $1}' "artifacts/core-sha-${arch}/sha256-${arch}.txt")" \
               "$VER" "$version" "$arch" >> "sha256sums-${version}.txt"

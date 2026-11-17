@@ -16,8 +16,8 @@
 # 自建资产命名：sing-box-1.14.4-reF1nd_<发布tag>-linux-<架构>-musl.tar.gz
 #   - x86_64  -> -linux-amd64-musl / -linux-amd64v3-musl（含 x86-64-v3 优先候选）
 #   - aarch64 -> -linux-arm64-musl
-#   - armv7* / mipsel* -> 0.4.0 起不再构建，脚本会明确提示并保留已有内核。
-# armv5/armv6（arm-* 而非 armv7-*）、大端 mips 同样暂不发布。
+#   - mipsel -> 本仓库构建 linux-mipsle-musl（GOARCH=mipsle, GOMIPS=softfloat），不含 with_ebpf。
+#   - armv7* / armv5/armv6（arm-*）及大端 mips 暂不发布。
 #
 # Download methodology follows luci-app-vnt2cli:
 #   - curl is the preferred downloader, with --retry 2 inside a single mirror;
@@ -331,7 +331,7 @@ asset_candidates_for_arch() {
 	#   sing-box-<REFIND_VERSION>_<REFIND_ASSET_TAG>-linux-<arch>-musl.tar.gz
 	# 例：sing-box-1.14.4-reF1nd_0.4.0-linux-amd64-musl.tar.gz
 	# CI 打包时会把 REFIND_TAG 改写为本次发布标签（如 0.4.0）。
-	# 注意：本项目自建，仅构建 amd64 / amd64v3 / arm64 三种（放弃 armv7/mipsle）。
+	# 本项目构建 amd64 / amd64v3 / arm64（with_ebpf）和 mipsle（不含 with_ebpf）。
 	local ver="${REFIND_VERSION}" tag="${REFIND_ASSET_TAG}"
 	case "$arch" in
 		x86_64)
@@ -344,10 +344,11 @@ asset_candidates_for_arch() {
 		aarch64)
 			echo "sing-box-${ver}_${tag}-linux-arm64-musl.tar.gz"
 			;;
-		armv7*|mipsel*|*mipsle*)
-			# 0.4.0 起本项目自建内核只构建 amd64/amd64v3/arm64 三种，不再提供
-			# armv7 / mipsle。返回失败让上层提示「当前架构暂不支持」并保留
-			# 现有内核，绝不误导用户去下载一个会 404 的文件。
+		mipsel|mipsle*)
+			echo "sing-box-${ver}_${tag}-linux-mipsle-musl.tar.gz"
+			;;
+		armv7*|*mips*)
+			# armv7 与大端 MIPS 暂无本项目构建产物。
 			return 1
 			;;
 		*)

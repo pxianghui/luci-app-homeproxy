@@ -2,6 +2,7 @@
 
 {%-
 import { readfile } from 'fs';
+import { connect } from 'ubus';
 import { cursor } from 'uci';
 import { isEmpty } from '/etc/homeproxy/scripts/homeproxy.uc';
 
@@ -58,6 +59,8 @@ uci.load(cfgname);
 
 const routing_mode = uci.get(cfgname, 'config', 'routing_mode') || 'bypass_mainland_china';
 let outbound_node, outbound_udp_node, china_dns_server, bypass_cn_traffic;
+const ubus = connect();
+const sing_features = ubus.call('luci.homeproxy', 'singbox_get_features', {}) || {};
 
 if (routing_mode !== 'custom') {
 	outbound_node = uci.get(cfgname, 'config', 'main_node') || 'nil';
@@ -72,8 +75,10 @@ let routing_port = uci.get(cfgname, 'config', 'routing_port');
 if (routing_port === 'common')
 	routing_port = uci.get(cfgname, 'infra', 'common_port') || '22,53,80,143,443,465,587,853,873,993,995,8080,8443,9418';
 
-const proxy_mode = uci.get(cfgname, 'config', 'proxy_mode') || 'redirect_tproxy',
-      ipv6_support = uci.get(cfgname, 'config', 'ipv6_support') || '0';
+let proxy_mode = uci.get(cfgname, 'config', 'proxy_mode') || 'redirect_tproxy';
+if (match(proxy_mode, /^ebpf(?:_|$)/) && !sing_features.with_ebpf)
+	proxy_mode = 'redirect_tproxy';
+const ipv6_support = uci.get(cfgname, 'config', 'ipv6_support') || '0';
 
 let self_mark, redirect_port,
     tproxy_port, tproxy_mark,

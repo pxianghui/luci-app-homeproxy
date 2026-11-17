@@ -3,6 +3,7 @@
 'use strict';
 
 import { writefile } from 'fs';
+import { connect } from 'ubus';
 import { cursor } from 'uci';
 import { isEmpty, RUN_DIR } from 'homeproxy';
 
@@ -10,8 +11,15 @@ const cfgname = 'homeproxy';
 const uci = cursor();
 uci.load(cfgname);
 
-const routing_mode = uci.get(cfgname, 'config', 'routing_mode') || 'bypass_mainland_china',
-      proxy_mode = uci.get(cfgname, 'config', 'proxy_mode') || 'redirect_tproxy';
+/* MIPSLE core builds intentionally omit with_ebpf. Keep the firewall setup
+   consistent with generate_client.uc and firewall_post.ut when a config is
+   imported from an eBPF-capable router. */
+const ubus = connect();
+const sing_features = ubus.call('luci.homeproxy', 'singbox_get_features', {}) || {};
+const routing_mode = uci.get(cfgname, 'config', 'routing_mode') || 'bypass_mainland_china';
+let proxy_mode = uci.get(cfgname, 'config', 'proxy_mode') || 'redirect_tproxy';
+if (match(proxy_mode, /^ebpf(?:_|$)/) && !sing_features.with_ebpf)
+	proxy_mode = 'redirect_tproxy';
 
 let outbound_node, tun_name;
 if (match(proxy_mode, /tun/)) {

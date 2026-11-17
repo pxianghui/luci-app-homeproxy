@@ -4,7 +4,7 @@
 
 - `luci-app-homeproxy_<版本>-all.apk` —— 本仓库用 OpenWrt 25.12 SDK 编译的 **all 架构** luci 包（含中文 lmo）
   （IPK / OpenWrt 24.10 及更早已不再提供：内核过低，启用不了 eBPF）
-- `sing-box` —— **打过补丁的 reF1nd sing-box 1.14.4-reF1nd** 静态二进制（对应架构，含 with_ebpf）
+- `sing-box` —— **打过补丁的 reF1nd sing-box 1.14.4-reF1nd** 静态二进制（amd64/arm64 含 with_ebpf；mipsle 使用 softfloat 构建，不含 with_ebpf / with_gvisor）
 - `install.sh` —— 一键部署脚本
 - `README.md` —— 本说明
 
@@ -21,9 +21,9 @@
 3. 填写：
    - `tag`：版本号，例如 `0.1.01`（建议不带 `v` 前缀；它就是 Release 标签与包版本）
    - `description`：Release 描述（可选）
-4. 等待所有 job 完成（luci 编译 + 2 个架构内核 amd64/arm64 + 打包，约 10–20 分钟）
+4. 等待所有 job 完成（luci 编译 + amd64/arm64/mipsle 三个架构内核 + 打包；耗时以 Actions 实际排队和编译时间为准）
 5. 到 **Releases** 页面，该版本只有一个 Release（标签即你填的版本号），内含：
-   - `homeproxy-deploy_<ver>-amd64.zip` / `-arm64`：各架构一体化部署包（命名与 luci 包一致：版本号在前、架构在后）
+   - `homeproxy-deploy_<ver>-amd64.zip` / `-arm64.zip` / `-mipsle.zip`：各架构一体化部署包（命名与 luci 包一致：版本号在前、架构在后）
    - `luci-app-homeproxy_<ver>-all.apk`：独立 luci 包（不含内核，装后自动下载）
    - `sing-box-1.14.4-reF1nd_<版本>-linux-*-musl.tar.gz`：打补丁内核（供「更新内核」自动下载）
 
@@ -35,16 +35,20 @@
 ## 二、安装（传到路由器 tmp，一条命令装好）
 
 ```bash
-# 在本机把 zip 传到路由器
-scp homeproxy-deploy_0.1.01-amd64.zip root@路由器IP:/tmp/
-
-# SSH 进路由器，一条复合命令：解压 + 进入目录 + 执行安装
+# 小米 R3G / MT7621 示例
+scp homeproxy-deploy_0.1.01-mipsle.zip root@路由器IP:/tmp/
 ssh root@路由器IP
-cd /tmp && unzip -o homeproxy-deploy_0.1.01-amd64.zip && cd homeproxy-deploy_0.1.01-amd64 && sh install.sh
+
+# 保留 ZIP，只解压 APK 和脚本；sing-box 通过 unzip -p 流式安装，不产生第二份大文件
+cd /tmp
+mkdir -p homeproxy-deploy_0.1.01-mipsle
+cd homeproxy-deploy_0.1.01-mipsle
+unzip -o ../homeproxy-deploy_0.1.01-mipsle.zip 'luci-app-homeproxy_*.apk' install.sh README.md
+sh install.sh
 ```
 
-`install.sh` 会自动：停服务 → 用 apk 安装 luci（自动解决依赖，需联网或已配源）→
-铺设打补丁内核到 `/usr/bin/sing-box` → 启用并启动 homeproxy → 刷新 LuCI 缓存。
+`install.sh` 会自动：预检内核架构 → 停服务 → 用 apk 升级 luci（自动解决依赖，需联网或已配源）→
+从上级 ZIP 流式写入打补丁内核到 `/usr/bin/sing-box` → 校验版本 → 启动 homeproxy → 刷新 LuCI 缓存。amd64/arm64 也可完整解压后运行。
 
 ---
 
@@ -53,20 +57,21 @@ cd /tmp && unzip -o homeproxy-deploy_0.1.01-amd64.zip && cd homeproxy-deploy_0.1
 | ZIP 后缀   | 适用 `uname -m`        | 典型设备 |
 |------------|------------------------|----------|
 | `amd64`    | `x86_64`               | x86 软路由、虚拟机 |
-| `arm64`    | `aarch64`              |  ARM64 软路由、N1（用此）、R2S 等 |
+| `arm64`    | `aarch64`              | ARM64 软路由、N1、R2S 等 |
+| `mipsle`   | `mips`（小端）         | 小米 R3G / MT7621 等 MIPSLE 设备 |
 
-> 0.4.0 起不再构建 `armv7` / `mipsle` 内核（reF1nd 1.14.4 与自建构建均只发 amd64/amd64v3/arm64）。其余架构请用旧版本安装包或自行编译。
+> MIPSLE 使用 `GOARCH=mipsle` + `GOMIPS=softfloat`，不编入 `with_ebpf`（32 位 eBPF Go 库不受支持）和 `with_gvisor`（gVisor 当前仅支持 amd64/arm64）；保留其余 MIPSLE 可用的构建标签。面板只显示当前核心支持的代理模式。大端 MIPS、ARMv5/6/7 暂不构建。
 
-下错架构会在 `install.sh` 铺设内核后运行报错；用 `uname -m` 确认后选对 zip 重来即可。
+`install.sh` 会在停止服务或修改软件包之前执行内核架构与版本预检；选错 ZIP 会直接退出，不覆盖当前核心。
 
 ---
 
 ## 四、重要注意事项
 
-1. **面板「更新内核」可用且安全（全架构）**：`update_core.sh` 的 `REFIND_REPO` 指向本仓库
-   （`weicaixian86/luci-app-homeproxy`），`REFIND_TAG` 在构建时被改写为该版本的 Release 标签
-   （如 `0.4.0`），里面是**带补丁**的内核。点「更新内核」会从同一个 Release 拉补丁版，不会丢补丁；
-   amd64 / arm64 已纳入自动下载（0.4.0 起不再构建 armv7 / mipsle；大端 mips 与 armv5/6 亦未构建）。
+1. **面板「更新内核」可用且安全（已发布架构）**：`update_core.sh` 的 `REFIND_REPO` 在 CI 构建时改写为当前仓库
+   （`${GITHUB_REPOSITORY}`），`REFIND_TAG` 在构建时被改写为该版本的 Release 标签
+   （如 `0.4.10`），里面是**带补丁**的内核。点「更新内核」会从同一个 Release 拉补丁版，不会丢补丁；
+   amd64 / arm64 / mipsle 已纳入自动下载；大端 mips 与 ARMv5/6/7 暂未构建。
    ⚠️ 不要删除已发布的 Release——旧版 luci 的自动下载仍指向它。
 2. **版本钉死的意义**：二进制版本号被编译为 `1.14.4-reF1nd_<插件版本>`（如 `1.14.4-reF1nd_0.4.0`），
    `update_core.sh` 的 `ensure_core` 只比对 `_` 之前的基础版本 `1.14.4-reF1nd`，因此会判定
@@ -99,9 +104,9 @@ curl -s -H "Authorization: Bearer homeproxy" http://127.0.0.1:9090/providers/pro
 ## 六、内核构建参数（可复现）
 
 ```
-CGO_ENABLED=0 GOOS=linux GOARCH=<arch> \
+CGO_ENABLED=0 GOOS=linux GOARCH=<arch> [GOMIPS=softfloat for mipsle] \
 go build -trimpath -o sing-box \
-  -tags "with_gvisor,with_quic,with_dhcp,with_wireguard,with_utls,with_acme,with_clash_api,with_tailscale,with_ccm,with_ocm,with_cloudflared,with_usbip,with_openvpn,with_openconnect,with_musl,with_ebpf" \
+  -tags "<matrix-specific build tags; omit with_ebpf on mipsle>" \
   -ldflags "-X 'github.com/sagernet/sing-box/constant.Version=1.14.4-reF1nd' -X runtime.godebugDefault=multipathtcp=0,tlssha1=1 -s -w -buildid=" \
   ./cmd/sing-box
 ```

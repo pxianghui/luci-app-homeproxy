@@ -20,7 +20,7 @@ import {
 
 const ubus = connect();
 
-/* const features = ubus.call('luci.homeproxy', 'singbox_get_features') || {}; */
+const sing_features = ubus.call('luci.homeproxy', 'singbox_get_features', {}) || {};
 
 /* UCI config start */
 const uci = cursor();
@@ -214,8 +214,13 @@ if (routing_mode !== 'custom') {
 	sniff_override = uci.get(uciconfig, uciroutingsetting, 'sniff_override');
 }
 
-const proxy_mode = uci.get(uciconfig, ucimain, 'proxy_mode') || 'redirect_tproxy',
-      default_interface = uci.get(uciconfig, ucicontrol, 'bind_interface');
+let proxy_mode = uci.get(uciconfig, ucimain, 'proxy_mode') || 'redirect_tproxy';
+/* 配置从带 eBPF 的设备迁移过来时，若当前核心（例如 MIPSLE 32 位构建）
+   没有 with_ebpf，安全回落到 nftables Redirect/TProxy，防止 sing-box 因
+   eBPF inbound not included in this build 而拒绝启动。防火墙脚本使用相同回落。 */
+if (match(proxy_mode, /^ebpf(?:_|$)/) && !sing_features.with_ebpf)
+	proxy_mode = 'redirect_tproxy';
+const default_interface = uci.get(uciconfig, ucicontrol, 'bind_interface');
 
 const mixed_port = uci.get(uciconfig, uciinfra, 'mixed_port') || '5330';
 

@@ -97,6 +97,7 @@ section "Shell syntax"
 	# dash / busybox ash 下，必须一起过 -n；漏掉自己正是 0.2.12 那次
 	# 「本地全绿、CI 解析期报 Syntax error」的直接原因。
 	find "$ROOT/tools/tests" -type f -name '*.sh' 2>/dev/null
+	[ -f "$ROOT/deploy/install.sh" ] && printf '%s\n' "$ROOT/deploy/install.sh"
 } | sort > "$WORK/sh.list"
 while IFS= read -r f; do
 	[ -n "$f" ] || continue
@@ -1921,7 +1922,7 @@ fi
 # 抓到（exp1 改成 LOCK_DIR 后仍然 ALL PASSED）。
 RES_CLEANUP=$(sed -n '/^cleanup() {/,/^}/p' "$RES_SH")
 if printf '%s\n' "$RES_CLEANUP" | grep -qF 'if [ -n "$LOCK_HELD" ]' \
-   && ! printf '%s\n' "$RES_CLEANUP" | grep -qF '-n "$LOCK_DIR"'; then
+   && ! printf '%s\n' "$RES_CLEANUP" | grep -qF -- '-n "$LOCK_DIR"'; then
 	ok "the resource update lock is only released by the process that actually took it"
 else
 	bad "the losing side of the resource lock deletes the winner's lock on exit (mutual exclusion collapses: two updates run at once and one reports 'Update failed.')"
@@ -2476,6 +2477,85 @@ else
 	bad "the store_selected patch no longer adds store_selected / does not gate Load/StoreSelected"
 fi
 
+# ── MIPSLE / Xiaomi R3G build target ─────────────────────────────────────────
+UCORE="$PKG/root/etc/homeproxy/scripts/update_core.sh"
+BD="$ROOT/.github/workflows/build-deploy.yml"
+INSTALL="$ROOT/deploy/install.sh"
+if grep -Fq 'mipsel|mipsle*)' "$UCORE" \
+   && grep -q 'linux-mipsle-musl.tar.gz' "$UCORE" \
+   && grep -q 'CORE_SHA256_MIPSLE' "$UCORE"; then
+	ok "runtime core selector maps MIPSLE to the MIPSLE-musl asset and checksum"
+else
+	bad "runtime core selector has no complete MIPSLE asset/checksum mapping"
+fi
+if grep -qE '^          - arch: mipsle$' "$BD" \
+   && grep -qE '^            goarch: mipsle$' "$BD" \
+   && grep -qE '^            gomips: softfloat$' "$BD" \
+   && grep -q 'for arch in amd64 arm64 mipsle; do' "$BD"; then
+	ok "build workflow cross-compiles and packages the MIPSLE softfloat target"
+else
+	bad "build workflow is missing the MIPSLE softfloat build/release target"
+fi
+if grep -A6 -E '^          - arch: mipsle$' "$BD" | grep -E '^            build_tags:' | grep -Eq 'with_ebpf|with_gvisor'; then
+	bad "MIPSLE build tags must omit with_ebpf and the amd64/arm64-only with_gvisor"
+else
+	ok "MIPSLE build tags omit unsupported eBPF and amd64/arm64-only gVisor"
+fi
+if grep -q 'REFIND_REPO=.*GITHUB_REPOSITORY' "$BD"; then
+	ok "runtime downloader is configured to fetch assets from the current fork"
+else
+	bad "runtime downloader still points to the upstream repository after fork release"
+fi
+if grep -Fq 'CORE_ARCHIVE="$self.zip"' "$INSTALL" \
+   && grep -Fq 'unzip -t "$CORE_ARCHIVE"' "$INSTALL" \
+   && grep -Fq 'unzip -p "$CORE_ARCHIVE" sing-box' "$INSTALL"; then
+	ok "R3G installer validates the sibling MIPSLE ZIP and streams the core without unpacking a second copy"
+else
+	bad "R3G installer does not safely validate/stream the sibling MIPSLE ZIP"
+fi
+if grep -q 'ELF32 little-endian MIPS' "$INSTALL" \
+   && grep -q 'grep -q.*1.14.4-reF1nd' "$INSTALL"; then
+	ok "installer preflights MIPSLE ELF header and the pinned reF1nd core version"
+else
+	bad "installer is missing the architecture/version preflight"
+fi
+if grep -q 'apk --print-arch' "$INSTALL" \
+   && grep -q 'mips_ei_data' "$INSTALL"; then
+	ok "installer distinguishes MIPS little-endian from big-endian before accepting a MIPSLE core"
+else
+	bad "installer treats uname -m=mips as sufficient proof of little-endian architecture"
+fi
+stop_line=$(grep -n '/etc/init.d/homeproxy stop' "$INSTALL" | head -1 | cut -d: -f1)
+version_line=$(grep -n '部署 ZIP 版本' "$INSTALL" | head -1 | cut -d: -f1)
+if [ -n "$stop_line" ] && [ -n "$version_line" ] && [ "$version_line" -lt "$stop_line" ]; then
+	ok "installer checks MIPSLE ZIP/APK version agreement before stopping the running service"
+else
+	bad "installer stops the running service before verifying that ZIP and APK versions match"
+fi
+if grep -q "readelf -h.*grep -q 'Class:.*ELF32'" "$BD"; then
+	ok "MIPSLE CI verification checks ELF32 in addition to little-endian/MIPS machine type"
+else
+	bad "MIPSLE CI verification does not check the ELF class"
+fi
+PRE="$PKG/root/etc/homeproxy/scripts/firewall_pre.uc"
+POST="$PKG/root/etc/homeproxy/scripts/firewall_post.ut"
+CLIENTJS="$PKG/htdocs/luci-static/resources/view/homeproxy/client.js"
+GC="$PKG/root/etc/homeproxy/scripts/generate_client.uc"
+if grep -q "proxy_mode = 'redirect_tproxy'" "$GC" \
+   && grep -q "proxy_mode = 'redirect_tproxy'" "$PRE" \
+   && grep -q "proxy_mode = 'redirect_tproxy'" "$POST"; then
+	ok "generator and both firewall phases fall back from imported eBPF modes on MIPSLE"
+else
+	bad "an imported eBPF setting can still reach a firewall/config path on a core without eBPF"
+fi
+if grep -q "singbox_get_features" "$GC" \
+   && grep -q "singbox_get_features" "$PRE" \
+   && grep -q "singbox_get_features" "$POST"; then
+	ok "the eBPF fallback in all runtime paths is based on the installed core's actual build tags"
+else
+	bad "one runtime path guesses architecture instead of inspecting actual sing-box build tags"
+fi
+
 # ── eBPF 四种代理模式（local × shared 组合）──────────────────────────────────
 # 现场依据：sing-box 1.14.4 的 option/ebpf.go 把枚举写死为
 #   local.data_plane  ∈ {cgroup, socket_assign}
@@ -2693,7 +2773,7 @@ else
 fi
 
 if ! grep -q 'luci-app-homeproxy_\*-all\.ipk' "$ROOT/deploy/install.sh" \
-   && grep -q '已不再提供 .ipk' "$ROOT/deploy/install.sh"; then
+   && grep -q '仅提供 OpenWrt 25.12+ 使用的 .apk' "$ROOT/deploy/install.sh"; then
 	ok "install.sh rejects opkg/24.10 and installs only the .apk"
 else
 	bad "install.sh still references the .ipk package or lacks the 24.10 rejection"

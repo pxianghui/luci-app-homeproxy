@@ -1183,19 +1183,19 @@ return view.extend({
 		}
 
 		o = s.taboption('routing', form.ListValue, 'proxy_mode', _('Proxy mode'));
-		/* eBPF 四种组合排在最前，默认第 1 种。由 sing-box 内核 eBPF inbound 直接
-		   接管流量，无需 nftables redirect/tproxy 劫持。四种都同时启用 local 与
-		   shared，故既能给 LAN 设备当透明代理网关，也让路由器本机走代理。
-		   需要内核支持 eBPF（BPF_JIT/cgroup v2/BTF）且所用 sing-box 内核带
-		   with_ebpf；不满足时请改回 Redirect 系列。 */
-		o.value('ebpf_cgroup_shared_socket_assign',
-			_('eBPF local(cgroup) + shared(socket_assign)'));
-		o.value('ebpf_cgroup_shared_packet_rewrite',
-			_('eBPF local(cgroup) + shared(packet_rewrite)'));
-		o.value('ebpf_socket_assign_shared_socket_assign',
-			_('eBPF local(socket_assign) + shared(socket_assign)'));
-		o.value('ebpf_socket_assign_shared_packet_rewrite',
-			_('eBPF local(socket_assign) + shared(packet_rewrite)'));
+		/* eBPF 四种组合只在当前 sing-box 核心确实编入 with_ebpf 时显示。
+		   32 位 MIPSLE 构建不编入 with_ebpf（cilium/ebpf 不支持 32 位目标），
+		   因而仅提供 Redirect/TProxy/Tun 模式，避免用户选中后服务启动失败。 */
+		if (features.with_ebpf) {
+			o.value('ebpf_cgroup_shared_socket_assign',
+				_('eBPF local(cgroup) + shared(socket_assign)'));
+			o.value('ebpf_cgroup_shared_packet_rewrite',
+				_('eBPF local(cgroup) + shared(packet_rewrite)'));
+			o.value('ebpf_socket_assign_shared_socket_assign',
+				_('eBPF local(socket_assign) + shared(socket_assign)'));
+			o.value('ebpf_socket_assign_shared_packet_rewrite',
+				_('eBPF local(socket_assign) + shared(packet_rewrite)'));
+		}
 		o.value('redirect', _('Redirect TCP'));
 		if (features.hp_has_tproxy)
 			o.value('redirect_tproxy', _('Redirect TCP + TProxy UDP'));
