@@ -2501,6 +2501,16 @@ if grep -A6 -E '^          - arch: mipsle$' "$BD" | grep -E '^            build_
 else
 	ok "MIPSLE build tags omit unsupported eBPF and amd64/arm64-only gVisor"
 fi
+if grep -A7 -E '^          - arch: mipsle$' "$BD" | grep -E '^            build_tags:' | grep -q 'with_tailscale'; then
+	bad "MIPSLE build tags must omit with_tailscale because Tailscale/DERP packages exclude linux/mipsle"
+else
+	ok "MIPSLE build tags omit Tailscale/DERP, which excludes linux/mipsle"
+fi
+if grep -Fq 'Invalid release tag' "$BD" && grep -Fq 'leading/trailing spaces or tabs' "$BD"; then
+	ok "workflow rejects whitespace-contaminated release tags before building"
+else
+	bad "workflow does not guard against whitespace in release tags"
+fi
 if grep -q 'REFIND_REPO=.*GITHUB_REPOSITORY' "$BD"; then
 	ok "runtime downloader is configured to fetch assets from the current fork"
 else

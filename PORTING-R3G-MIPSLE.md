@@ -13,7 +13,7 @@
 
 1. `update_core.sh` 恢复 MIPSLE 运行时资产选择，并使用现有 `CORE_SHA256_MIPSLE` 常量校验下载文件。
 2. GitHub Actions 增加 `mipsle` 构建矩阵，生成 MIPSLE-musl tarball、SHA256、离线部署 ZIP，并注入自动更新校验值。
-3. MIPSLE 保留 QUIC、WireGuard、uTLS、Clash API、Tailscale 等常用 build tags，但不带 `with_ebpf` 和 `with_gvisor`。Cilium ebpf-go 不支持 32 位架构；gVisor 项目目前只支持 amd64/arm64。
+3. MIPSLE 保留 QUIC、WireGuard、uTLS、Clash API、CCM、OCM、Cloudflared、USBIP、OpenVPN、OpenConnect 等 build tags；由于本次完整构建日志显示 Tailscale/DERP 包在 linux/mipsle 下所有 Go 文件均被 build constraints 排除，因此 MIPSLE 不编入 `with_tailscale`。同时不带 `with_ebpf` 和 `with_gvisor`。
 4. LuCI 仅在核心 `Tags:` 声明 `with_ebpf` 时显示 eBPF 模式。生成器与两个防火墙脚本对从其他设备导入的 eBPF 配置统一回退到 `redirect_tproxy`。
 5. 部署脚本在停止服务、改动 APK 或覆盖核心前，先执行随包 `sing-box version`，核对设备架构和 `1.14.4-reF1nd` 版本，减少错装 AMD64/ARM64 核心的风险。
 6. 文档与静态测试增加 MIPSLE 构建目标、软浮点 ABI 和 eBPF 限制说明。
@@ -22,7 +22,7 @@
 
 MIPSLE 构建不编入 `with_ebpf` 或 `with_gvisor`。Cilium ebpf-go 上游明确说明 32 位架构不在其支持范围内；gVisor 上游文档列出的 CPU 架构是 x86_64/AMD64 与 ARM64。因而本适配不向 MT7621 暴露 eBPF 模式，也不编入 gVisor Tun stack；使用 nftables Redirect/TProxy 等常规路径。
 
-MIPSLE 保留 `with_tailscale`、`with_ccm`、`with_ocm`、`with_cloudflared`、`with_usbip`、`with_openvpn`、`with_openconnect` 等现有项目标签；官方 Tailscale 发行物也提供 `mipsle` 静态构建。省略 `with_ebpf` 和 `with_gvisor`。`with_naive_outbound` 仍沿用项目当前构建流程的做法，不编入静态发行包。
+MIPSLE 保留 `with_ccm`、`with_ocm`、`with_cloudflared`、`with_usbip`、`with_openvpn`、`with_openconnect` 等标签；不编入 `with_tailscale`，因为当前 reF1nd/sing-box 构建中 `protocol/tailscale` 和 `service/derp` 在 linux/mipsle 下没有可编译的 Go 文件。省略 `with_ebpf` 和 `with_gvisor`。`with_naive_outbound` 仍沿用项目当前构建流程的做法，不编入静态发行包。
 
 ## 应用补丁
 
